@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/RadeonOpenCompute/k8s-device-plugin/internal/pkg/amdgpu"
+	"github.com/RadeonOpenCompute/k8s-device-plugin/internal/pkg/hwloc"
 	"github.com/golang/glog"
 	"github.com/kubevirt/device-plugin-manager/pkg/dpm"
 	"golang.org/x/net/context"
@@ -129,14 +130,39 @@ func (p *Plugin) ListAndWatch(e *pluginapi.Empty, s pluginapi.DevicePlugin_ListA
 
 	devs := make([]*pluginapi.Device, len(p.AMDGPUs))
 
+	var hw hwloc.Hwloc
+	hw.Init()
+
 	i := 0
 	for id := range p.AMDGPUs {
 		devs[i] = &pluginapi.Device{
 			ID:     id,
 			Health: pluginapi.Healthy,
 		}
+
+		numas, err := hw.GetNUMANodes(id)
+		glog.Infof("Watching GPU with bus ID: %s NUMA Node: %+v", id, numas)
+
+		if err == nil && len(numas) > 0 {
+			numaNodes := make([]*pluginapi.NUMANode, len(numas))
+
+			for j, v := range numas {
+				numaNodes[j] = &pluginapi.NUMANode{
+					ID: int64(v),
+				}
+			}
+
+			devs[i].Topology = &pluginapi.TopologyInfo{
+				Nodes: numaNodes,
+			}
+		} else {
+			glog.Error(err)
+		}
+
 		i++
 	}
+	hw.Destroy()
+
 	s.Send(&pluginapi.ListAndWatchResponse{Devices: devs})
 
 	for {
@@ -244,6 +270,7 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "AMD GPU device plugin for Kubernetes\n")
 		fmt.Fprintf(os.Stderr, "%s version %s\n", os.Args[0], gitDescribe)
+		fmt.Fprintf(os.Stderr, "%s", hwloc.GetVersions())
 		fmt.Fprintln(os.Stderr, "Usage:")
 		flag.PrintDefaults()
 	}
@@ -254,6 +281,7 @@ func main() {
 
 	glog.Infof("AMD GPU device plugin for Kubernetes")
 	glog.Infof("%s version %s\n", os.Args[0], gitDescribe)
+	glog.Infof("%s", hwloc.GetVersions())
 
 	l := Lister{
 		ResUpdateChan: make(chan dpm.PluginNameList),
